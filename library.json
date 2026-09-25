@@ -1,0 +1,19 @@
+{
+    "name": "OFM-PowerSupplyDisplay",
+    "version": "0.1.0",
+    "description": "1.54\" ST7789 240x240 status display for OpenKNX SC8815 power supplies (LVGL 9.6, Chinese UI, alarm popups)",
+    "homepage": "https://openknx.de",
+    "authors": {
+        "name": "OpenKNX",
+        "email": "info@openknx.de",
+        "url": "https://openknx.de",
+        "maintainer": true
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/zhengyuanyan/OFM-PowerSupplyDisplay.git"
+    },
+    "dependencies": {
+        "lvgl/lvgl": "^9.6.0"
+    }
+}

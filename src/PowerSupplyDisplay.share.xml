@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?xml-model href="../../../../Organization/knxprod-support/knx_project_20/knx-editor.xsd" type="application/xml" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<KNX xmlns:op="http://github.com/OpenKNX/OpenKNXproducer" xmlns="http://knx.org/xml/project/20" CreatedBy="KNX MT" ToolVersion="5.1.255.16695">
+  <ManufacturerData>
+    <Manufacturer RefId="M-00FA">
+      <ApplicationPrograms>
+        <ApplicationProgram Id="%AID%" ApplicationNumber="200" ApplicationVersion="1" ProgramType="ApplicationProgram" MaskVersion="MV-07B0" Name="PM" LoadProcedureStyle="MergedProcedure" PeiType="0" DefaultLanguage="de" DynamicTableManagement="false" Linkable="false" MinEtsVersion="4.0">
+          <Static>
+            <ParameterTypes>
+              <!-- 背光超时：存的是"索引"，不是秒数（固件里 cTimeoutSeconds[] 查表）。
+                   改枚举顺序必须同步改固件里的表。 -->
+              <ParameterType Id="%AID%_PT-DisplayTimeout" Name="DisplayTimeout">
+                <TypeRestriction Base="Value" SizeInBit="3">
+                  <Enumeration Id="%AID%_PT-DisplayTimeout_EN-0" Text="常亮（不关背光）" Value="0" />
+                  <Enumeration Id="%AID%_PT-DisplayTimeout_EN-1" Text="10 秒" Value="1" />
+                  <Enumeration Id="%AID%_PT-DisplayTimeout_EN-2" Text="30 秒" Value="2" />
+                  <Enumeration Id="%AID%_PT-DisplayTimeout_EN-3" Text="60 秒" Value="3" />
+                  <Enumeration Id="%AID%_PT-DisplayTimeout_EN-4" Text="5 分钟" Value="4" />
+                </TypeRestriction>
+              </ParameterType>
+
+              <!-- 背光亮度（PWM 占空比）。下限 10% 是为了"有显示但很暗"，
+                   要彻底关屏请用背光超时或"启用显示屏 = 否"。 -->
+              <ParameterType Id="%AID%_PT-DisplayBrightness" Name="DisplayBrightness">
+                <TypeNumber SizeInBit="8" Type="unsignedInt" minInclusive="10" maxInclusive="100" />
+              </ParameterType>
+            </ParameterTypes>
+            <Parameters>
+              <!-- 2 字节 (16 bit)：
+                   字节 0  bit7      = 启用显示屏
+                          bit6..4   = 背光超时索引 (3 bit, 从 BitOffset 1 开始)
+                          bit3..0   = 空闲
+                   字节 1  bit7..0   = 背光亮度 (%)
+                   位序: 同一字节内 BitOffset 0 = 最高位 (7)，与其它模块一致 -->
+              <Union SizeInBit="16">
+                <Memory CodeSegment="%AID%_RS-04-00000" Offset="0" BitOffset="0" />
+
+                <Parameter Id="%AID%_UP-%TT%00001" Name="Enabled" ParameterType="%AID%_PT-OnOffYesNo" Offset="0" BitOffset="0" Text="启用显示屏" Value="1" />
+                <Parameter Id="%AID%_UP-%TT%00002" Name="BacklightTimeout" ParameterType="%AID%_PT-DisplayTimeout" Offset="0" BitOffset="1" Text="背光超时" Value="0" />
+                <Parameter Id="%AID%_UP-%TT%00003" Name="Brightness" ParameterType="%AID%_PT-DisplayBrightness" Offset="1" BitOffset="0" Text="背光亮度" Value="100" SuffixText="%" />
+              </Union>
+            </Parameters>
+            <ParameterRefs>
+              <ParameterRef Id="%AID%_UP-%TT%00001_R-%TT%0000101" RefId="%AID%_UP-%TT%00001" />
+              <ParameterRef Id="%AID%_UP-%TT%00002_R-%TT%0000201" RefId="%AID%_UP-%TT%00002" />
+              <ParameterRef Id="%AID%_UP-%TT%00003_R-%TT%0000301" RefId="%AID%_UP-%TT%00003" />
+            </ParameterRefs>
+            <ComObjectTable>
+            </ComObjectTable>
+            <ComObjectRefs>
+            </ComObjectRefs>
+            <Script>
+            </Script>
+          </Static>
+          <Dynamic>
+            <!-- 屏上内容全部由固件固定布局（总线半屏 + 辅助半屏 + 报警对话框），
+                 ETS 里只有背光相关的 3 个参数。 -->
+            <Channel Id="%AID%_CH-%PREFIX%" Number="%PREFIX%" Name="Main" Text="电源显示屏" Icon="remote-desktop" HelpContext="DSP-Anzeige">
+              <ParameterBlock Id="%AID%_PB-nnn" Name="DisplaySettings" Text="电源显示屏" Icon="remote-desktop" ShowInComObjectTree="true" HelpContext="DSP-Anzeige">
+                <ParameterSeparator Id="%AID%_PS-nnn" Text="电源显示屏 版本 %ModuleVersion%" UIHint="Headline" />
+                <ParameterSeparator Id="%AID%_PS-nnn" Text="" UIHint="HorizontalRuler" />
+
+                <ParameterSeparator Id="%AID%_PS-nnn" Text="屏幕" UIHint="Headline" />
+                <ParameterRefRef RefId="%AID%_UP-%TT%00001_R-%TT%0000101" IndentLevel="1" HelpContext="DSP-Anzeige" />
+                <ParameterRefRef RefId="%AID%_UP-%TT%00003_R-%TT%0000301" IndentLevel="1" HelpContext="DSP-Helligkeit" />
+                <ParameterRefRef RefId="%AID%_UP-%TT%00002_R-%TT%0000201" IndentLevel="1" HelpContext="DSP-Backlight-Timeout" />
+              </ParameterBlock>
+            </Channel>
+          </Dynamic>
+        </ApplicationProgram>
+      </ApplicationPrograms>
+      <Baggages>
+        <Baggage TargetPath="" Name="Help_cn.zip" Id="%FILE-HELP-cn%">
+          <FileInfo TimeInfo="%DATETIME%" />
+        </Baggage>
+      </Baggages>
+    </Manufacturer>
+  </ManufacturerData>
+</KNX>
