@@ -24,6 +24,13 @@ PowerSupplyDisplayModule openknxPowerSupplyDisplayModule;
 /// LVGL 心跳周期
 #define DISPLAY_LVGL_TICK_MS 5
 
+/// 开机界面：每行芯片状态揭开的间隔与起始延迟（制造"正在检测"的节奏感）
+#define DISPLAY_BOOT_ROW_START_MS 300
+#define DISPLAY_BOOT_ROW_MS 140
+/// 开机界面最短显示时间与最长等待时间（收不到数据也会自动进入主界面）
+#define DISPLAY_BOOT_MIN_MS 2200
+#define DISPLAY_BOOT_TIMEOUT_MS 8000
+
 /// 每个故障位的显示文案（顺序 = 故障位 bit0..bit7）
 static const char *const cAlarmText[8] = {
     "SC8815 无应答", // 0x01
@@ -100,14 +107,26 @@ void PowerSupplyDisplayModule::setup(bool configured)
         return;
     }
 
-    displayUiBegin();
     registerWakeButtons();
     initInputStatusPins();
     updateInputStatus();
 
     _backlightOn = true;
-    displayPortSetBacklight(_enabled ? _brightness : 0);
     _lastActivity = delayTimerInit();
+
+    if (_enabled)
+    {
+        // 先建立并刷出开机界面，再打开背光（软开关）：
+        // 面板 GRAM 里上一次运行的画面不会被照出来，主界面对象也还没建立
+        startBoot();
+        displayPortSetBacklight(_brightness);
+    }
+    else
+    {
+        // ETS 关掉显示：不显示开机界面，但主界面对象仍建好，disp on 时能看到内容
+        displayUiBegin();
+        displayPortSetBacklight(0);
+    }
 
     logInfoP("Display: 240x240 ST7789 ready, %s, brightness %u%%, backlight timeout %us",
              _enabled ? "enabled" : "disabled", _brightness, _timeoutS);
@@ -132,6 +151,13 @@ void PowerSupplyDisplayModule::loop(bool configured)
     {
         _lvglTimer = now;
         lv_timer_handler();
+    }
+
+    // 开机界面期间只刷开机界面：数值 / 报警 / 背光超时都等它结束
+    if (_bootActive)
+    {
+        updateBoot(now);
+        return;
     }
 
     // 数值刷新
@@ -159,6 +185,9 @@ void PowerSupplyDisplayModule::setUnit(bool isAux, bool chipOk, bool inaOk, bool
     PowerSupplyDisplayValues &v = _unit[isAux ? PowerSupplyDisplay_Aux : PowerSupplyDisplay_Bus];
 
     v.valid = chipOk || inaOk || tempOk;
+    v.chipOk = chipOk;
+    v.inaOk = inaOk;
+    v.tempOk = tempOk;
     v.outputOn = outputOn;
     v.fault = faultCode;
     v.inputVoltage_mV = inputVoltage_mV;
@@ -166,6 +195,80 @@ void PowerSupplyDisplayModule::setUnit(bool isAux, bool chipOk, bool inaOk, bool
     v.outputVoltage_mV = outputVoltage_mV;
     v.outputCurrent_mA = outputCurrent_mA;
     v.temperatureC = temperatureC;
+
+    _unitSeen[isAux ? PowerSupplyDisplay_Aux : PowerSupplyDisplay_Bus] = true;
+}
+
+/* ============================================================================
+ *  开机界面
+ * ========================================================================== */
+
+void PowerSupplyDisplayModule::startBoot(bool replay)
+{
+    if (replay || !displayUiBootVisible())
+        displayUiBeginBoot();
+
+    // setup() 里没有 loop 的 5 ms 心跳，这里直接刷一帧，让开机界面立刻可见
+    if (displayPortDisplay() != nullptr)
+        lv_refr_now(displayPortDisplay());
+
+    _bootActive = true;
+    _bootStart = delayTimerInit();
+    logInfoP("Display: boot screen%s", replay ? " (replay)" : "");
+}
+
+void PowerSupplyDisplayModule::updateBoot(uint32_t now)
+{
+    const uint32_t elapsed = now - _bootStart;
+
+    // 逐行揭开：先给"检测中"，再显示实际结果
+    uint8_t revealed = 0;
+    if (elapsed >= DISPLAY_BOOT_ROW_START_MS)
+        revealed = (uint8_t)((elapsed - DISPLAY_BOOT_ROW_START_MS) / DISPLAY_BOOT_ROW_MS + 1);
+    if (revealed > DISPLAY_BOOT_CHIP_COUNT)
+        revealed = DISPLAY_BOOT_CHIP_COUNT;
+
+    for (uint8_t i = 0; i < DISPLAY_BOOT_CHIP_COUNT; i++)
+    {
+        const uint8_t side = (i < 3) ? PowerSupplyDisplay_Bus : PowerSupplyDisplay_Aux;
+        if (i >= revealed || !_unitSeen[side])
+        {
+            displayUiSetBootChip(i, DisplayBoot_Pending);
+            continue;
+        }
+
+        const PowerSupplyDisplayValues &v = _unit[side];
+        const bool ok = (i % 3 == 0) ? v.chipOk : (i % 3 == 1) ? v.inaOk : v.tempOk;
+        displayUiSetBootChip(i, ok ? DisplayBoot_Ok : DisplayBoot_Fail);
+    }
+
+    displayUiSetBootProgress((uint8_t)(revealed * 100 / DISPLAY_BOOT_CHIP_COUNT));
+
+    const bool dataAvailable = _unitSeen[PowerSupplyDisplay_Bus] && _unitSeen[PowerSupplyDisplay_Aux];
+    if ((revealed >= DISPLAY_BOOT_CHIP_COUNT && dataAvailable && elapsed >= DISPLAY_BOOT_MIN_MS) ||
+        elapsed >= DISPLAY_BOOT_TIMEOUT_MS)
+    {
+        _bootActive = false;
+        displayUiFinishBoot();
+
+        // 开机界面走完才建立主界面：在此之前主界面的对象根本不存在，
+        // 所以启动时不可能先露出主界面
+        displayUiBegin();
+
+        // 立刻把最新数据刷到主界面，避免先闪一下 "--"
+        updateInputStatus();
+        displayUiSetSide(false, _unit[PowerSupplyDisplay_Bus]);
+        displayUiSetSide(true, _unit[PowerSupplyDisplay_Aux]);
+        displayUiSetInputPower(_inputOn[0], _inputOn[1]);
+
+        // 立即切换，不等下一轮 loop 的心跳
+        if (displayPortDisplay() != nullptr)
+            lv_refr_now(displayPortDisplay());
+
+        _lastActivity = now;
+
+        logInfoP("Display: boot screen finished");
+    }
 }
 
 /* ============================================================================
@@ -431,8 +534,9 @@ void PowerSupplyDisplayModule::showInformations()
     logInfoP("Display: %s, %s, brightness %u%%, invert %u, rotation %u, timeout %us",
              _displayOk ? "port ok" : "port FAILED", _enabled ? "enabled" : "disabled", _brightness,
              displayPortInvert() ? 1 : 0, displayPortRotation(), _timeoutS);
-    logInfoP("Display: backlight %s, %u alarm item(s), mask 0x%04X, test mode %s",
-             _backlightOn ? "on" : "off", _alarmItemCount, _alarmShownMask, _testMode ? "on" : "off");
+    logInfoP("Display: backlight %s, boot %s, %u alarm item(s), mask 0x%04X, test mode %s",
+             _backlightOn ? "on" : "off", _bootActive ? "active" : "done", _alarmItemCount, _alarmShownMask,
+             _testMode ? "on" : "off");
     logInfoP("Display: %u wake button(s) armed (PROG + SC8815 reset pins)", _wakeCount);
     logInfoP("Display: input power A %s, B %s", _inputOn[0] ? "on" : "off", _inputOn[1] ? "on" : "off");
 
@@ -457,6 +561,7 @@ void PowerSupplyDisplayModule::showHelp()
     openknx.console.printHelpLine("disp rot <0..3>", "屏幕方向 0/90/180/270 度");
     openknx.console.printHelpLine("disp timeout <0..300>", "背光超时秒数（0 = 常亮）");
     openknx.console.printHelpLine("disp test on|off", "强制弹出所有报警对话框（检查界面/字库）");
+    openknx.console.printHelpLine("disp boot", "重新播放开机界面（OpenKNX 图标 + 芯片初始化状态）");
     openknx.console.printHelpLine("disp redraw", "整屏强制重绘");
     openknx.console.printHelpLine("(硬件)", "背光被超时熄灭后：短按 PROG 或任一路复位按键即可点亮");
 }
@@ -565,6 +670,18 @@ bool PowerSupplyDisplayModule::processCommand(const std::string cmd, bool diagno
     {
         displayUiRefreshAll();
         logInfoP("Display: redraw");
+        return true;
+    }
+
+    if (arguments == "boot")
+    {
+        if (!_displayOk || !_enabled)
+        {
+            logInfoP("disp: display not available");
+            return true;
+        }
+        startBoot(true);
+        wake();
         return true;
     }
 

@@ -22,6 +22,9 @@
  *    SC8815 / INA238 / 温度传感器 / 输入电压 出现故障时，屏幕弹出红色对话框
  *    逐条显示故障内容；故障消失后自动关闭。
  *
+ *  上电后先显示开机界面：OpenKNX 图标 + 两路 SC8815 / INA238 / TMP102 的
+ *  初始化结果；开机界面结束后才创建数值界面并切换过去。
+ *
  *  数据来源：由 OFM-SC8815PowerSupply 通过 setUnit() 推送（与 OFM-BuzzerAlert 的
  *  setFaults() 同样的"可选依赖"模式），本模块不反向依赖 SC8815 驱动，
  *  也不自己碰 I2C 总线。
@@ -119,7 +122,14 @@ class PowerSupplyDisplayModule : public OpenKNX::Module
     uint32_t _wakeTimer[DISPLAY_WAKE_BUTTON_MAX] = {0};
     uint8_t _wakeCount = 0;
 
+    // ---- 开机界面：OpenKNX 图标 + 各芯片初始化状态 ----
+    bool _bootActive = false;
+    uint32_t _bootStart = 0;
+    bool _unitSeen[PowerSupplyDisplay_SideCount] = {false, false}; // 该路是否已收到过 setUnit()
+
     void applyParameters(bool configured);
+    void startBoot(bool replay = false);
+    void updateBoot(uint32_t now);
     bool anyAlarm() const;
     void showAlarmPage();
     void updateAlarmDialog(uint32_t now);

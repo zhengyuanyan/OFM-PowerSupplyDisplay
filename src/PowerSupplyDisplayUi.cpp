@@ -92,6 +92,9 @@ enum UiStatus : uint8_t
 #define UI_COL_INPUT_OFF_BORDER lv_color_hex(0x243040)
 #define UI_COL_INPUT_OFF_TEXT lv_color_hex(0x5A6675)
 
+// 开机界面
+#define UI_COL_BOOT_GREEN lv_color_hex(0x4CB944) // OpenKNX 标志里的绿色
+
 static lv_obj_t *sValueLabel[2][UI_ROW_COUNT] = {{nullptr}};
 static lv_obj_t *sStatusLabel[2] = {nullptr};
 static lv_obj_t *sStatusDot[2] = {nullptr};
@@ -109,6 +112,16 @@ static lv_obj_t *sAlarmRoot = nullptr;
 static lv_obj_t *sAlarmTitle = nullptr;
 static lv_obj_t *sAlarmBody = nullptr;
 static char sAlarmBodyCache[256] = {0};
+
+// 开机界面（显示在主屏幕上；主界面在它结束后才建立）
+static lv_obj_t *sBootRoot = nullptr;
+static lv_obj_t *sBootChipDot[DISPLAY_BOOT_CHIP_COUNT] = {nullptr};
+static lv_obj_t *sBootChipState[DISPLAY_BOOT_CHIP_COUNT] = {nullptr};
+static lv_obj_t *sBootProgressFill = nullptr;
+static lv_obj_t *sBootFooter = nullptr;
+static DisplayBootState sBootChipShown[DISPLAY_BOOT_CHIP_COUNT] = {DisplayBoot_Pending};
+static uint8_t sBootProgressShown = 0xFF;
+static char sBootFooterCache[32] = {0};
 
 /* ============================================================================
  *  数值格式化
@@ -269,6 +282,13 @@ static void createInputColumn()
 
 void displayUiBegin()
 {
+    // 主界面只在开机界面结束后建立；重播开机界面时不要重建（保留原有数值）
+    if (sValueLabel[0][0] != nullptr)
+    {
+        lv_obj_invalidate(lv_screen_active());
+        return;
+    }
+
     lv_obj_t *screen = lv_screen_active();
     lv_obj_remove_style_all(screen);
     lv_obj_set_style_bg_color(screen, UI_COL_BG, 0);
@@ -459,4 +479,211 @@ void displayUiRefreshAll()
     lv_obj_invalidate(lv_screen_active());
     if (sAlarmRoot != nullptr)
         lv_obj_invalidate(sAlarmRoot);
+    if (sBootRoot != nullptr)
+        lv_obj_invalidate(sBootRoot);
+}
+
+/* ============================================================================
+ *  开机界面
+ *
+ *    ┌──────────────────────────────────────┐
+ *    │ Open              SC8815             │  左上 OpenKNX 标志（Open / 绿线 / KNX）
+ *    │ ────                                  │  右侧设备名 + 中文字幕
+ *    │ KNX               电源显示            │
+ *    ├──────────────────────────────────────┤
+ *    │ 芯片初始化                            │
+ *    │ ┌──────────────────────────────────┐ │
+ *    │ │ ● SC8815 总线              OK    │ │  6 行 = 两路 × SC8815 / INA238 / TMP102
+ *    │ │ ● INA238 总线              OK    │ │  检测中 = 灰，成功 = 绿，失败 = 红
+ *    │ │ ● TMP102 总线              失败  │ │
+ *    │ │ ...                              │ │
+ *    │ └──────────────────────────────────┘ │
+ *    │ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░ │  进度条
+ *    │            正在检查芯片               │
+ *    └──────────────────────────────────────┘
+ * ========================================================================== */
+
+#define UI_BOOT_LOGO_X 12
+#define UI_BOOT_LOGO_Y 10
+#define UI_BOOT_LOGO_W 72
+#define UI_BOOT_TITLE_X 94
+#define UI_BOOT_DIVIDER_Y 66
+
+#define UI_BOOT_LIST_X 8
+#define UI_BOOT_LIST_Y 92
+#define UI_BOOT_LIST_W (UI_SCREEN_W - UI_BOOT_LIST_X - 8)
+#define UI_BOOT_LIST_H 118
+#define UI_BOOT_ROW_Y 2
+#define UI_BOOT_DOT_X 8
+#define UI_BOOT_DOT_SIZE 9
+#define UI_BOOT_NAME_X 22
+#define UI_BOOT_NAME_W 106
+#define UI_BOOT_STATE_X 136
+#define UI_BOOT_STATE_W (UI_BOOT_LIST_W - UI_BOOT_STATE_X - 8)
+
+#define UI_BOOT_PROGRESS_X 10
+#define UI_BOOT_PROGRESS_Y 214
+#define UI_BOOT_PROGRESS_H 6
+#define UI_BOOT_PROGRESS_W (UI_SCREEN_W - 2 * UI_BOOT_PROGRESS_X)
+#define UI_BOOT_FOOTER_Y 221
+
+static const char *const cBootChipNames[DISPLAY_BOOT_CHIP_COUNT] = {
+    "SC8815 总线", "INA238 总线", "TMP102 总线",
+    "SC8815 辅助", "INA238 辅助", "TMP102 辅助",
+};
+
+static const char *const cBootStateText[] = {"检测中", "OK", "失败"};
+
+static lv_color_t bootStateColor(DisplayBootState state)
+{
+    if (state == DisplayBoot_Ok)
+        return UI_COL_OK;
+    if (state == DisplayBoot_Fail)
+        return UI_COL_FAULT;
+    return UI_COL_VALUE_DIM;
+}
+
+void displayUiBeginBoot()
+{
+    displayUiFinishBoot();
+
+    lv_obj_t *screen = lv_screen_active();
+    lv_obj_set_style_pad_all(screen, 0, 0);
+    lv_obj_set_style_border_width(screen, 0, 0);
+    lv_obj_set_scrollable(screen, false);
+
+    sBootRoot = lv_obj_create(screen);
+    lv_obj_remove_style_all(sBootRoot);
+    lv_obj_set_pos(sBootRoot, 0, 0);
+    lv_obj_set_size(sBootRoot, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_style_bg_color(sBootRoot, UI_COL_BG, 0);
+    lv_obj_set_style_bg_opa(sBootRoot, LV_OPA_COVER, 0);
+    lv_obj_set_scrollable(sBootRoot, false);
+
+    // ---- OpenKNX 标志：Open / 绿色总线 / KNX（画在深色底上，文字用白色）----
+    createLabel(sBootRoot, "Open", UI_FONT_SMALL, UI_COL_VALUE, UI_BOOT_LOGO_X, UI_BOOT_LOGO_Y, UI_BOOT_LOGO_W,
+                UI_ROW_H, LV_TEXT_ALIGN_CENTER);
+    createBlock(sBootRoot, UI_BOOT_LOGO_X + 6, UI_BOOT_LOGO_Y + 19, UI_BOOT_LOGO_W - 12, 2, UI_COL_BOOT_GREEN, 1);
+    createBlock(sBootRoot, UI_BOOT_LOGO_X, UI_BOOT_LOGO_Y + 16, 6, 6, UI_COL_BOOT_GREEN, 1);
+    createBlock(sBootRoot, UI_BOOT_LOGO_X + UI_BOOT_LOGO_W - 6, UI_BOOT_LOGO_Y + 16, 6, 6, UI_COL_BOOT_GREEN, 1);
+    createLabel(sBootRoot, "KNX", UI_FONT_TITLE, UI_COL_VALUE, UI_BOOT_LOGO_X, UI_BOOT_LOGO_Y + 23, UI_BOOT_LOGO_W,
+                24, LV_TEXT_ALIGN_CENTER);
+
+    createLabel(sBootRoot, "SC8815", UI_FONT_TITLE, UI_COL_VALUE, UI_BOOT_TITLE_X, UI_BOOT_LOGO_Y - 1, 140, 24,
+                LV_TEXT_ALIGN_LEFT);
+    createLabel(sBootRoot, "电源显示", UI_FONT_SMALL, UI_COL_ACCENT_BUS, UI_BOOT_TITLE_X, UI_BOOT_LOGO_Y + 23, 140,
+                UI_ROW_H, LV_TEXT_ALIGN_LEFT);
+
+    createBlock(sBootRoot, UI_BOOT_PROGRESS_X, UI_BOOT_DIVIDER_Y, UI_BOOT_PROGRESS_W, 1, UI_COL_ROW_LINE, 0);
+    createLabel(sBootRoot, "芯片初始化", UI_FONT_SMALL, UI_COL_ACCENT_BUS, UI_BOOT_PROGRESS_X + 2,
+                UI_BOOT_DIVIDER_Y + 5, 160, UI_ROW_H, LV_TEXT_ALIGN_LEFT);
+
+    // ---- 芯片状态列表 ----
+    lv_obj_t *card = lv_obj_create(sBootRoot);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_pos(card, UI_BOOT_LIST_X, UI_BOOT_LIST_Y);
+    lv_obj_set_size(card, UI_BOOT_LIST_W, UI_BOOT_LIST_H);
+    lv_obj_set_style_bg_color(card, UI_COL_CARD_BG, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, UI_CARD_RADIUS, 0);
+    lv_obj_set_style_border_color(card, UI_COL_CARD_BORDER, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_scrollable(card, false);
+
+    for (uint8_t i = 0; i < DISPLAY_BOOT_CHIP_COUNT; i++)
+    {
+        const int32_t y = UI_BOOT_ROW_Y + i * UI_ROW_H;
+
+        sBootChipDot[i] = createBlock(card, UI_BOOT_DOT_X, y + 5, UI_BOOT_DOT_SIZE, UI_BOOT_DOT_SIZE, UI_COL_VALUE_DIM,
+                                     LV_RADIUS_CIRCLE);
+        createLabel(card, cBootChipNames[i], UI_FONT_SMALL, UI_COL_VALUE, UI_BOOT_NAME_X, y, UI_BOOT_NAME_W,
+                    UI_ROW_H, LV_TEXT_ALIGN_LEFT);
+        sBootChipState[i] = createLabel(card, cBootStateText[DisplayBoot_Pending], UI_FONT_SMALL, UI_COL_VALUE_DIM,
+                                        UI_BOOT_STATE_X, y, UI_BOOT_STATE_W, UI_ROW_H, LV_TEXT_ALIGN_RIGHT);
+        sBootChipShown[i] = DisplayBoot_Pending;
+    }
+
+    // ---- 进度条 ----
+    createBlock(sBootRoot, UI_BOOT_PROGRESS_X, UI_BOOT_PROGRESS_Y, UI_BOOT_PROGRESS_W, UI_BOOT_PROGRESS_H,
+                UI_COL_ROW_LINE, 3);
+    sBootProgressFill = createBlock(sBootRoot, UI_BOOT_PROGRESS_X, UI_BOOT_PROGRESS_Y, 0, UI_BOOT_PROGRESS_H,
+                                    UI_COL_ACCENT_BUS, 3);
+    sBootProgressShown = 0xFF;
+
+    // ---- 底部总结 ----
+    sBootFooter = createLabel(sBootRoot, "正在检查芯片", UI_FONT_SMALL, UI_COL_VALUE_DIM, UI_BOOT_PROGRESS_X,
+                              UI_BOOT_FOOTER_Y, UI_BOOT_PROGRESS_W, UI_ROW_H, LV_TEXT_ALIGN_CENTER);
+    strncpy(sBootFooterCache, "正在检查芯片", sizeof(sBootFooterCache) - 1);
+
+    lv_obj_invalidate(sBootRoot);
+}
+
+void displayUiSetBootChip(uint8_t index, DisplayBootState state)
+{
+    if (sBootRoot == nullptr || index >= DISPLAY_BOOT_CHIP_COUNT)
+        return;
+    if (sBootChipShown[index] == state)
+        return;
+
+    sBootChipShown[index] = state;
+    const lv_color_t color = bootStateColor(state);
+    lv_label_set_text(sBootChipState[index], cBootStateText[state]);
+    lv_obj_set_style_text_color(sBootChipState[index], color, 0);
+    lv_obj_set_style_bg_color(sBootChipDot[index], color, 0);
+
+    bool allDone = true;
+    bool anyFail = false;
+    for (uint8_t i = 0; i < DISPLAY_BOOT_CHIP_COUNT; i++)
+    {
+        if (sBootChipShown[i] == DisplayBoot_Pending)
+            allDone = false;
+        else if (sBootChipShown[i] == DisplayBoot_Fail)
+            anyFail = true;
+    }
+
+    if (allDone && sBootFooter != nullptr)
+    {
+        const char *text = anyFail ? "初始化完成，有故障" : "初始化完成";
+        if (strncmp(sBootFooterCache, text, sizeof(sBootFooterCache) - 1) != 0)
+        {
+            strncpy(sBootFooterCache, text, sizeof(sBootFooterCache) - 1);
+            sBootFooterCache[sizeof(sBootFooterCache) - 1] = '\0';
+            lv_label_set_text(sBootFooter, text);
+        }
+        lv_obj_set_style_text_color(sBootFooter, anyFail ? UI_COL_FAULT : UI_COL_OK, 0);
+    }
+}
+
+void displayUiSetBootProgress(uint8_t percent)
+{
+    if (sBootProgressFill == nullptr || percent > 100 || percent == sBootProgressShown)
+        return;
+
+    sBootProgressShown = percent;
+    const int32_t width = (UI_BOOT_PROGRESS_W * percent) / 100;
+    lv_obj_set_width(sBootProgressFill, width);
+    lv_obj_set_style_radius(sBootProgressFill, (width > 0 && width < UI_BOOT_PROGRESS_H) ? width / 2 : 3, 0);
+}
+
+void displayUiFinishBoot()
+{
+    if (sBootRoot != nullptr)
+        lv_obj_delete(sBootRoot);
+
+    sBootRoot = nullptr;
+    sBootProgressFill = nullptr;
+    sBootFooter = nullptr;
+    for (uint8_t i = 0; i < DISPLAY_BOOT_CHIP_COUNT; i++)
+    {
+        sBootChipDot[i] = nullptr;
+        sBootChipState[i] = nullptr;
+        sBootChipShown[i] = DisplayBoot_Pending;
+    }
+    sBootProgressShown = 0xFF;
+    sBootFooterCache[0] = '\0';
+}
+
+bool displayUiBootVisible()
+{
+    return sBootRoot != nullptr;
 }

@@ -202,9 +202,11 @@ bool displayPortBegin()
     // （OFM-BuzzerAlert）正在用它做发声频率，所以这里绝不要去改。
     // 两者本来就在不同的 PWM slice 上（GPIO21 -> slice2，蜂鸣器 GPIO29 -> slice6），
     // 各用自己初始化时的频率，互不影响；背光用内核默认的 1 kHz 已足够（LED 不会闪）。
+    //
+    // 这里只把背光关掉，等第一帧（开机界面）刷完再由上层点亮：面板 GRAM 在复位后
+    // 还留着上一次运行的画面，先开背光会把这个旧画面露出来。
     pinMode(OPENKNX_BPS_DISPLAY_BL_PIN, OUTPUT);
     digitalWrite(OPENKNX_BPS_DISPLAY_BL_PIN, LOW);
-    displayPortSetBacklight(sBacklight);
 
     // ---- SPI ----
     // 注意：CS 由固件自己拉，所以这里不交给硬件，begin(false) 即可
