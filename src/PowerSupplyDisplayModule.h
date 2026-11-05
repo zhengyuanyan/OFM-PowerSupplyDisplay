@@ -16,6 +16,9 @@
  *        输出电压 / 输出电流   (输出侧 INA238)
  *        温度                 (TMP102)
  *
+ *    最左边一列向下分成两格显示 A / B 路输入电源（GPIO27 / GPIO28），
+ *    正在供电的那一路底色变绿（两格只是与上下半屏对齐排版，与电源通道无关）。
+ *
  *    SC8815 / INA238 / 温度传感器 / 输入电压 出现故障时，屏幕弹出红色对话框
  *    逐条显示故障内容；故障消失后自动关闭。
  *
@@ -94,6 +97,9 @@ class PowerSupplyDisplayModule : public OpenKNX::Module
     uint32_t _lvglTimer = 0;
     uint32_t _uiTimer = 0;
 
+    // ---- A/B 路输入电源供电状态（只读 GPIO，正在供电 = 有效电平）----
+    bool _inputOn[2] = {false, false};
+
     uint16_t _alarmShownMask = 0; // 上一次已显示的报警集合（用于判断"有变化"）
     uint8_t _alarmItemSide[16] = {0}; // 当前活跃报警项：所属侧
     uint8_t _alarmItemBit[16] = {0};  // 当前活跃报警项：故障位号 0..7
@@ -123,6 +129,8 @@ class PowerSupplyDisplayModule : public OpenKNX::Module
     void registerWakeButtons();
     void addWakeButton(uint8_t pin, uint8_t activeLevel);
     bool anyWakeButtonPressed(uint32_t now);
+    void initInputStatusPins();
+    void updateInputStatus();
 };
 
 extern PowerSupplyDisplayModule openknxPowerSupplyDisplayModule;

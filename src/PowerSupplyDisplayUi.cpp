@@ -14,6 +14,9 @@
  *    y=121 .. 239  下半屏：辅助电源
  *
  *  每半屏：标题栏 22 + 5 行 x 19 = 117（<= 119）
+ *
+ *  最左边一列（宽 UI_LEFT_COL_W）向下分成两格，分别显示 A / B 路输入电源：
+ *  正在供电的那一路整格底色变绿。
  * ========================================================================== */
 #define UI_SCREEN_W 240
 #define UI_SCREEN_H 240
@@ -25,9 +28,14 @@
 
 #define UI_ROW_COUNT 5
 
-#define UI_COL_LABEL_X 8
-#define UI_COL_VALUE_X 84
-#define UI_COL_VALUE_W 148
+// 左侧 A/B 输入电源状态列
+#define UI_LEFT_COL_W 26
+#define UI_CONTENT_X UI_LEFT_COL_W
+
+#define UI_COL_LABEL_X (UI_CONTENT_X + 6)
+#define UI_COL_LABEL_W 66
+#define UI_COL_VALUE_X (UI_CONTENT_X + 74)
+#define UI_COL_VALUE_W (UI_SCREEN_W - UI_COL_VALUE_X - 8)
 
 #define UI_FONT_SMALL (&lv_font_ps_16)
 #define UI_FONT_TITLE (&lv_font_ps_20)
@@ -59,10 +67,22 @@ enum UiStatus : uint8_t
 #define UI_COL_DIALOG_TITLE lv_color_hex(0xFF6B6B)
 #define UI_COL_DIALOG_HINT lv_color_hex(0xFFB0B0)
 
+// 左侧 A/B 输入电源状态列
+#define UI_COL_INPUT_ON_BG lv_color_hex(0x1F8A3B)
+#define UI_COL_INPUT_ON_TEXT lv_color_hex(0xFFFFFF)
+#define UI_COL_INPUT_OFF_BG lv_color_hex(0x1E1E1E)
+#define UI_COL_INPUT_OFF_TEXT lv_color_hex(0x6E6E6E)
+
 static lv_obj_t *sValueLabel[2][UI_ROW_COUNT] = {{nullptr}};
 static lv_obj_t *sStatusLabel[2] = {nullptr};
 static char sValueCache[2][UI_ROW_COUNT][24] = {{{0}}};
 static char sStatusCache[2][16] = {{0}};
+
+// 左侧 A/B 输入电源状态格（索引 0 = A 路，1 = B 路）
+static lv_obj_t *sInputBox[2] = {nullptr};
+static lv_obj_t *sInputLabel[2] = {nullptr};
+static bool sInputOn[2] = {false, false};
+static bool sInputValid = false;
 
 static lv_obj_t *sAlarmRoot = nullptr;
 static lv_obj_t *sAlarmTitle = nullptr;
@@ -127,28 +147,58 @@ static void createHalf(uint8_t side, int32_t offsetY)
 {
     lv_obj_t *screen = lv_screen_active();
 
-    // 标题栏
+    // 标题栏（右侧让出左侧 A/B 状态列）
     lv_obj_t *header = lv_obj_create(screen);
     lv_obj_remove_style_all(header);
-    lv_obj_set_pos(header, 0, offsetY);
-    lv_obj_set_size(header, UI_SCREEN_W, UI_HEADER_H);
+    lv_obj_set_pos(header, UI_CONTENT_X, offsetY);
+    lv_obj_set_size(header, UI_SCREEN_W - UI_CONTENT_X, UI_HEADER_H);
     lv_obj_set_style_bg_color(header, UI_COL_HEADER_BG, 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
 
-    createLabel(header, cSideNames[side], UI_FONT_TITLE, UI_COL_VALUE, 8, 0, 140, UI_HEADER_H, LV_TEXT_ALIGN_LEFT);
+    createLabel(header, cSideNames[side], UI_FONT_TITLE, UI_COL_VALUE, 6, 0, 106, UI_HEADER_H, LV_TEXT_ALIGN_LEFT);
     sStatusLabel[side] = createLabel(header, cStatusNames[UiStatus_NoData], UI_FONT_SMALL, UI_COL_OFF,
-                                     104, 0, 128, UI_HEADER_H, LV_TEXT_ALIGN_RIGHT);
+                                     112, 0, UI_SCREEN_W - UI_CONTENT_X - 116, UI_HEADER_H, LV_TEXT_ALIGN_RIGHT);
     strncpy(sStatusCache[side], cStatusNames[UiStatus_NoData], sizeof(sStatusCache[side]) - 1);
 
     // 5 行数值
     for (uint8_t i = 0; i < UI_ROW_COUNT; i++)
     {
         const int32_t y = offsetY + UI_ROW_FIRST_Y + (int32_t)i * UI_ROW_H;
-        createLabel(screen, cRowNames[i], UI_FONT_SMALL, UI_COL_LABEL, UI_COL_LABEL_X, y, 72, UI_ROW_H,
-                    LV_TEXT_ALIGN_LEFT);
+        createLabel(screen, cRowNames[i], UI_FONT_SMALL, UI_COL_LABEL, UI_COL_LABEL_X, y, UI_COL_LABEL_W,
+                    UI_ROW_H, LV_TEXT_ALIGN_LEFT);
         sValueLabel[side][i] = createLabel(screen, "--", UI_FONT_SMALL, UI_COL_VALUE, UI_COL_VALUE_X, y,
                                           UI_COL_VALUE_W, UI_ROW_H, LV_TEXT_ALIGN_RIGHT);
         strncpy(sValueCache[side][i], "--", sizeof(sValueCache[side][i]) - 1);
+    }
+}
+
+/**
+ * @brief 左侧 A/B 输入电源状态列：一列向下分成两格，与上下半屏对齐
+ *
+ * A / B 是两路输入电源（不是总线/辅助通道），两格只是排版上与上下半屏对齐；
+ * 正在供电的那一格底色变绿。
+ */
+static void createInputColumn()
+{
+    lv_obj_t *screen = lv_screen_active();
+    static const char *const names[2] = {"A", "B"};
+    const int32_t ys[2] = {0, UI_HALF2_Y};
+    const int32_t hs[2] = {UI_HALF_H, UI_SCREEN_H - UI_HALF2_Y};
+
+    for (uint8_t i = 0; i < 2; i++)
+    {
+        lv_obj_t *box = lv_obj_create(screen);
+        lv_obj_remove_style_all(box);
+        lv_obj_set_pos(box, 0, ys[i]);
+        lv_obj_set_size(box, UI_LEFT_COL_W, hs[i]);
+        lv_obj_set_style_bg_color(box, UI_COL_INPUT_OFF_BG, 0);
+        lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+        lv_obj_set_scrollable(box, false);
+        sInputBox[i] = box;
+
+        sInputLabel[i] = createLabel(box, names[i], UI_FONT_TITLE, UI_COL_INPUT_OFF_TEXT, 0, 0, UI_LEFT_COL_W,
+                                     UI_HEADER_H, LV_TEXT_ALIGN_CENTER);
+        lv_obj_center(sInputLabel[i]); // 横向居中 + 纵向居中
     }
 }
 
@@ -162,6 +212,7 @@ void displayUiBegin()
 
     createHalf(0, 0);
     createHalf(1, UI_HALF2_Y);
+    createInputColumn();
 
     // 中间分隔线
     lv_obj_t *separator = lv_obj_create(screen);
@@ -229,6 +280,25 @@ void displayUiSetSide(bool isAux, const PowerSupplyDisplayValues &v)
         }
         setLabelTextIfChanged(sValueLabel[side][i], sValueCache[side][i], sizeof(sValueCache[side][i]), buffer);
     }
+}
+
+void displayUiSetInputPower(bool aOn, bool bOn)
+{
+    if (sInputBox[0] == nullptr)
+        return;
+
+    const bool on[2] = {aOn, bOn};
+    for (uint8_t i = 0; i < 2; i++)
+    {
+        // 第一次调用时强制刷一次，之后只在状态变化时碰 LVGL
+        if (sInputValid && sInputOn[i] == on[i])
+            continue;
+
+        sInputOn[i] = on[i];
+        lv_obj_set_style_bg_color(sInputBox[i], on[i] ? UI_COL_INPUT_ON_BG : UI_COL_INPUT_OFF_BG, 0);
+        lv_obj_set_style_text_color(sInputLabel[i], on[i] ? UI_COL_INPUT_ON_TEXT : UI_COL_INPUT_OFF_TEXT, 0);
+    }
+    sInputValid = true;
 }
 
 /* ============================================================================

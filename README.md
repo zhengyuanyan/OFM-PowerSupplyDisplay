@@ -16,6 +16,21 @@
 SC8815 / INA238 / 温度传感器 / 输入电压出现故障时，屏幕中央弹出红色对话框逐条显示
 故障内容，多于 4 条每 3 秒翻页；**故障消失后自动关闭**。
 
+屏幕最左边还有一列 **A/B 输入电源供电状态**：一列向下分成两格（只是排版上与上下半屏对齐），
+分别显示 `A`、`B`；正在供电的那一路整格底色变**绿**，未供电为深灰。
+引脚（`include/hardware.h`）：
+
+```c
+#define OPENKNX_BPS_INPUT_A_POWER_STATUS_PIN        27   // A 路输入电源供电状态
+#define OPENKNX_BPS_INPUT_A_POWER_STATUS_ACTIVE_ON  HIGH
+#define OPENKNX_BPS_INPUT_B_POWER_STATUS_PIN        28   // B 路输入电源供电状态
+#define OPENKNX_BPS_INPUT_B_POWER_STATUS_ACTIVE_ON  HIGH
+```
+
+这两根线是**只读输入**，由板上电源检测逻辑驱动；没定义这些宏的板子自动不显示该列。
+状态变化时会打一条日志：`Display: input power A on, B off`，
+也可用 `disp info` 查看当前状态。
+
 ## 硬件
 
 引脚全部在 `include/hardware.h` 的 `OPENKNX_BPS_DISPLAY_*` 宏里定义（本模块无硬编码引脚）：
@@ -126,7 +141,7 @@ RP2040 上留给固件的是 1 MB，LVGL 全开部件会直接链接溢出（实
 
 ```
 src/PowerSupplyDisplayModule.{h,cpp}   OpenKNX 模块：ETS 参数、报警判定、对话框驱动、控制台
-src/PowerSupplyDisplayUi.{h,cpp}       LVGL 界面：上下分屏布局、数值格式化、报警对话框
+src/PowerSupplyDisplayUi.{h,cpp}       LVGL 界面：上下分屏布局、左侧 A/B 输入电源列、数值格式化、报警对话框
 src/PowerSupplyDisplayPort.{h,cpp}     ST7789 + LVGL 移植：SPI、面板参数、背光、tick
 src/lv_conf.h                          LVGL 9.6 配置（含裁剪说明）
 src/fonts/                             生成的中文字库

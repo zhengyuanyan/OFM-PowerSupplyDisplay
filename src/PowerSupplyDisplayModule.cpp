@@ -102,6 +102,8 @@ void PowerSupplyDisplayModule::setup(bool configured)
 
     displayUiBegin();
     registerWakeButtons();
+    initInputStatusPins();
+    updateInputStatus();
 
     _backlightOn = true;
     displayPortSetBacklight(_enabled ? _brightness : 0);
@@ -138,6 +140,7 @@ void PowerSupplyDisplayModule::loop(bool configured)
         _uiTimer = now;
         displayUiSetSide(false, _unit[PowerSupplyDisplay_Bus]);
         displayUiSetSide(true, _unit[PowerSupplyDisplay_Aux]);
+        updateInputStatus();
     }
 
     updateAlarmDialog(now);
@@ -338,6 +341,44 @@ void PowerSupplyDisplayModule::registerWakeButtons()
 #endif
 }
 
+/**
+ * @brief 初始化 A/B 路输入电源供电状态引脚（只读输入）
+ *
+ * 引脚由 external 逻辑驱动；没有定义对应宏的板子自动跳过。
+ */
+void PowerSupplyDisplayModule::initInputStatusPins()
+{
+#ifdef OPENKNX_BPS_INPUT_A_POWER_STATUS_PIN
+    openknx.gpio.pinMode(OPENKNX_BPS_INPUT_A_POWER_STATUS_PIN, INPUT);
+#endif
+#ifdef OPENKNX_BPS_INPUT_B_POWER_STATUS_PIN
+    openknx.gpio.pinMode(OPENKNX_BPS_INPUT_B_POWER_STATUS_PIN, INPUT);
+#endif
+}
+
+/**
+ * @brief 读取 A/B 路输入电源供电状态并刷新左侧状态列
+ */
+void PowerSupplyDisplayModule::updateInputStatus()
+{
+    bool on[2] = {false, false};
+
+#ifdef OPENKNX_BPS_INPUT_A_POWER_STATUS_PIN
+    on[0] = openknx.gpio.digitalRead(OPENKNX_BPS_INPUT_A_POWER_STATUS_PIN) == OPENKNX_BPS_INPUT_A_POWER_STATUS_ACTIVE_ON;
+#endif
+#ifdef OPENKNX_BPS_INPUT_B_POWER_STATUS_PIN
+    on[1] = openknx.gpio.digitalRead(OPENKNX_BPS_INPUT_B_POWER_STATUS_PIN) == OPENKNX_BPS_INPUT_B_POWER_STATUS_ACTIVE_ON;
+#endif
+
+    if (on[0] == _inputOn[0] && on[1] == _inputOn[1])
+        return;
+
+    _inputOn[0] = on[0];
+    _inputOn[1] = on[1];
+    logInfoP("Display: input power A %s, B %s", on[0] ? "on" : "off", on[1] ? "on" : "off");
+    displayUiSetInputPower(on[0], on[1]);
+}
+
 void PowerSupplyDisplayModule::addWakeButton(uint8_t pin, uint8_t activeLevel)
 {
     if (_wakeCount >= DISPLAY_WAKE_BUTTON_MAX)
@@ -393,6 +434,7 @@ void PowerSupplyDisplayModule::showInformations()
     logInfoP("Display: backlight %s, %u alarm item(s), mask 0x%04X, test mode %s",
              _backlightOn ? "on" : "off", _alarmItemCount, _alarmShownMask, _testMode ? "on" : "off");
     logInfoP("Display: %u wake button(s) armed (PROG + SC8815 reset pins)", _wakeCount);
+    logInfoP("Display: input power A %s, B %s", _inputOn[0] ? "on" : "off", _inputOn[1] ? "on" : "off");
 
     static const char *const sideNames[PowerSupplyDisplay_SideCount] = {"总线", "辅助"};
     for (uint8_t s = 0; s < PowerSupplyDisplay_SideCount; s++)
